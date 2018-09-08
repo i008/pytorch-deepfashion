@@ -12,7 +12,18 @@ def adaptive_max_pool(input, size):
     return AdaptiveMaxPool2d(size[0], size[1])(input)
 
 
-def gated_roi_pooling(input, rois, gates, size=ROI_POOL_SIZE, spatial_scale=1.0):
+def gated_roi_pooling(input, rois, gates=None, size=ROI_POOL_SIZE, spatial_scale=1.0):
+    """
+    Standard roi-pooling extended to accept a mask vector (gates) wich will set all activations to zero for
+    correspnding features
+
+    :param input: features (for instance  feature maps from vgg/resnet
+    :param rois: rois [batch_id, x1, y1, x2, y2]
+    :param gates: mask vector with shape [len(gates), 1]
+    :param size: size of the pooled regions (for instance (3,3)
+    :param spatial_scale:
+    :return:
+    """
     assert (rois.dim() == 2)
     assert (rois.size(1) == 5)
     output = []
@@ -29,12 +40,25 @@ def gated_roi_pooling(input, rois, gates, size=ROI_POOL_SIZE, spatial_scale=1.0)
         output.append(mp)
 
     pooled_features = torch.cat(output, 0)
-    pooled_features[gates.flatten()] = 0
+    if gates is not None:
+        pooled_features[gates.flatten()] = 0
 
     return pooled_features.view(input.shape[0], -1, ROI_POOL_SIZE[0], ROI_POOL_SIZE[1])
 
 
 def landmark_predictions_to_roipool_boxes(landmark_loc, bbs=0):
+    """
+
+    Basically what we are doing here is translating the landmark location predictions (basically a vector of [BS, 16])
+    Into a format digestable by the roi_pooling functions. We require to rescale the predictions to the correpsonging
+    feature map size (in case of this VGG network we rescale by 16)
+
+    After we have the landmarks we need to create "boxes" around them this is controlled by the bbs parameter
+
+    :param landmark_loc:  [BS, 16]
+    :param bbs: size of the bounding box
+    :return:
+    """
     collect = []
     for batch_ix, landmark_position in enumerate(landmark_loc.reshape(-1, 2).unsqueeze(0)):
         for landmark_pair in landmark_position:
@@ -58,7 +82,7 @@ class FashionNetVgg16NoBn(nn.Module):
         vgg = vgg16()
 
         features = list(vgg.features.children())
-        self.conv4 = nn.Sequential(*features[:-8])
+        self.conv4 = nn.Sequential(*features[:-8])  # the paper implements DF with features taken from conv4 from vgg16
         self.conv5_pose = nn.Sequential(*features[-8:])
         self.conv5_global = nn.Sequential(*features[-8:])
 
@@ -70,6 +94,7 @@ class FashionNetVgg16NoBn(nn.Module):
         self.loc = nn.Linear(in_features=1024, out_features=16)
         self.vis = nn.Linear(in_features=1024, out_features=8)
 
+        #  5120 = concat[(4*1024)+1024]
         self.massive_attr = nn.Linear(in_features=5120, out_features=1000)
         self.categories = nn.Linear(in_features=5120, out_features=50)
 
@@ -118,4 +143,3 @@ if __name__ == '__main__':
     img = torch.Tensor(torch.rand(2, 3, 224, 224))
 
     fn(img)
-
